@@ -13,9 +13,9 @@ RUN echo "source /home/angr/.venv/bin/activate" >> /home/angr/.bashrc
 # setuptools required for capstone with python 3.12
 RUN /home/angr/.venv/bin/pip install -U pip setuptools
 
-# wheels/ holds the wheels built by the release pipeline, so the image can be
-# built before (or without) the release reaching PyPI. Anything not found
-# there is installed from PyPI.
+# packages/ holds the wheels and sdists built by the release pipeline, so the
+# image can be built before the release reaches PyPI. Anything not found there
+# is installed from PyPI.
 ARG ANGR_VERSION
-RUN --mount=type=bind,source=wheels,target=/tmp/wheels \
-    /home/angr/.venv/bin/pip install --no-cache-dir --find-links /tmp/wheels "angr[angrdb,unicorn]==${ANGR_VERSION}"
+RUN --mount=type=bind,source=packages,target=/tmp/packages \
+    /home/angr/.venv/bin/pip install --no-cache-dir --find-links /tmp/packages "angr[angrdb,unicorn]==${ANGR_VERSION}"

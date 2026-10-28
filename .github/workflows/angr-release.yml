@@ -168,6 +168,47 @@ jobs:
           path: wheels
           if-no-files-found: error
 
+      # Docker image
+      - name: Set up Docker Buildx
+        if: runner.os == 'Linux'
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: Prepare docker build context
+        if: runner.os == 'Linux'
+        id: docker
+        run: |
+          sdist=$(ls sdist/angr-[0-9]*.tar.gz)
+          version=${sdist#sdist/angr-}
+          version=${version%.tar.gz}
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=angr/angr:$version-$(docker version --format '{{.Server.Arch}}')" >> "$GITHUB_OUTPUT"
+
+          # Pure python wheels are only built on x86_64, so include the sdists
+          # for pip to fall back on
+          mkdir -p release-image/packages docker-image
+          cp wheels/* sdist/* release-image/packages/
+      - name: Build docker image
+        if: runner.os == 'Linux'
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: release-image
+          build-args: ANGR_VERSION=${{ steps.docker.outputs.version }}
+          tags: ${{ steps.docker.outputs.tag }}
+          outputs: type=docker,dest=docker-image/angr.tar
+      - name: Test docker image
+        if: runner.os == 'Linux'
+        run: |
+          docker load -i docker-image/angr.tar
+          docker run --rm ${{ steps.docker.outputs.tag }} /home/angr/.venv/bin/python -c "import angr; print('angr imports!')"
+      - name: Upload docker image artifact
+        if: runner.os == 'Linux'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v4
+        with:
+          name: docker-image-${{ matrix.os }}
+          path: docker-image
+          if-no-files-found: error
+          # Image layers are already compressed
+          compression-level: 0
+
   verify:
     runs-on: ${{ matrix.os }}
     strategy:
@@ -300,67 +341,39 @@ jobs:
         with:
           verbose: true
 
-  docker:
-    name: Build and publish docker image
-    runs-on: ubuntu-24.04
-    needs: publish
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
-        with:
-          persist-credentials: false
-
-      - name: Download sdist artifact
+      # Docker image
+      - name: Download docker image artifacts
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v4
         with:
-          name: sdist
-          path: sdist
-      - name: Download Linux wheels artifacts
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v4
-        with:
-          pattern: wheels-ubuntu-*
-          path: release-image/wheels
-          merge-multiple: true
-
-      - name: Determine angr version
-        id: version
+          pattern: docker-image-*
+          path: docker-images
+      - name: Load docker images
+        id: docker
         run: |
-          sdist=$(ls sdist/angr-[0-9]*.tar.gz)
-          version=${sdist#sdist/angr-}
+          tags=""
+          for image in docker-images/*/angr.tar; do
+            tags="$tags $(docker load -i "$image" | sed -n 's/^Loaded image: //p')"
+          done
+          echo "Loaded images:$tags"
+          echo "tags=$tags" >> "$GITHUB_OUTPUT"
+
+          sdist=$(ls dist/angr-[0-9]*.tar.gz)
+          version=${sdist#dist/angr-}
           version=${version%.tar.gz}
-          echo "Building docker image for angr $version"
           echo "version=$version" >> "$GITHUB_OUTPUT"
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
-
-      - name: Build test image
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
-        with:
-          context: release-image
-          platforms: linux/amd64
-          build-args: ANGR_VERSION=${{ steps.version.outputs.version }}
-          tags: angr/angr:test
-          load: true
-      - name: Test angr import
-        run: docker run --rm angr/angr:test /home/angr/.venv/bin/python -c "import angr; print('angr imports!')"
-
       - name: Login to Docker Hub
         if: github.event_name == 'schedule' || github.event.inputs.dry_run == 'false'
         uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
         with:
           username: angrbot
           password: ${{ secrets.DOCKER_API_KEY }}
-      - name: Build and push image
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
-        with:
-          context: release-image
-          platforms: linux/amd64,linux/arm64
-          build-args: ANGR_VERSION=${{ steps.version.outputs.version }}
-          tags: |
-            angr/angr:${{ steps.version.outputs.version }}
-            angr/angr:latest
-          push: ${{ github.event_name == 'schedule' || github.event.inputs.dry_run == 'false' }}
+      - name: Publish docker image
+        if: github.event_name == 'schedule' || github.event.inputs.dry_run == 'false'
+        run: |
+          for tag in ${{ steps.docker.outputs.tags }}; do
+            docker push "$tag"
+          done
+          docker buildx imagetools create \
+            -t angr/angr:${{ steps.docker.outputs.version }} \
+            -t angr/angr:latest \
+            ${{ steps.docker.outputs.tags }}
