@@ -17,8 +17,9 @@ NIGHTLY = os.environ.get("NIGHTLY", "false").lower() == "true"
 INCLUDE_SELF = os.environ.get("INCLUDE_SELF", "true").lower() == "true"
 STORE_DURATIONS = os.environ.get("STORE_DURATIONS", "false").lower() == "true"
 
-# Name of the pytest-split timings file, looked up in each project's tests directory
-DURATIONS_FILE = ".test_durations"
+# Directory holding the pytest-split timings of previous runs, laid out as
+# <project>/.test_durations. CI restores it from the GitHub Actions cache.
+DURATIONS_DIR = os.environ.get("TEST_DURATIONS_DIR", "../test_durations")
 RESULTS_DIR = "results"
 
 
@@ -36,10 +37,10 @@ def test_project(project: str) -> bool:
         f"--rootdir=./src/{project}/tests ./src/{project}/tests"
     )
 
-    # If the project ships a timings file, use it to balance the groups by
-    # expected runtime. Without one, pytest-split falls back to splitting by
+    # If we have timings for the project, use them to balance the groups by
+    # expected runtime. Without them, pytest-split falls back to splitting by
     # test count.
-    durations_path = f"./src/{project}/tests/{DURATIONS_FILE}"
+    durations_path = f"{DURATIONS_DIR}/{project}/.test_durations"
     known_durations = load_durations(durations_path)
     if known_durations:
         print(f"Using test timings from {durations_path}", flush=True)

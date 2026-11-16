@@ -23,11 +23,6 @@ on:
         default: true
         type: boolean
         required: false
-      store_durations:
-        description: "Record test timings and publish them as a test_durations artifact"
-        default: false
-        type: boolean
-        required: false
 
 jobs:
   build:
@@ -96,6 +91,14 @@ jobs:
     - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v4
       with:
         name: build_archive
+    # Timings are only ever saved from the default branch, so this restores
+    # the most recent set recorded there.
+    - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      name: Restore test timings
+      with:
+        path: test_durations
+        key: test-durations-${{ github.run_id }}-${{ github.run_attempt }}
+        restore-keys: test-durations-
     - run: /root/scripts/ga-test.sh
       name: Run tests
       env:
@@ -103,7 +106,7 @@ jobs:
         NUM_WORKERS: 10
         INCLUDE_SELF: ${{ inputs.include_self }}
         NIGHTLY: ${{ inputs.nightly }}
-        STORE_DURATIONS: ${{ inputs.store_durations }}
+        STORE_DURATIONS: ${{ github.ref_name == github.event.repository.default_branch }}
     - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v4
       if: always()
       with:
@@ -112,34 +115,44 @@ jobs:
           build/results/*.tests.xml
           build/results/*.durations.json
 
-  merge-durations:
-    name: Merge Test Timings
+  save-durations:
+    name: Save Test Timings
     runs-on: ubuntu-24.04
     needs: test
-    # Only publish timings from a complete run; a failed or cancelled worker
-    # would leave its tests missing from the merged file.
-    if: inputs.store_durations && needs.test.result == 'success'
+    # Timings are recorded on the default branch only, whose caches every
+    # other branch and pull request can read. Skip incomplete runs; a failed
+    # or cancelled worker would not have timed all of its tests.
+    if: github.ref_name == github.event.repository.default_branch && needs.test.result == 'success'
     steps:
+    - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      name: Restore previous test timings
+      with:
+        path: test_durations
+        key: test-durations-${{ github.run_id }}-${{ github.run_attempt }}
+        restore-keys: test-durations-
     - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v4
       with:
         pattern: Test Results *
         path: results
         merge-multiple: true
     - name: Merge per-worker timings
+      # New timings are layered over the previous ones, as a single run does
+      # not cover everything: nightly runs skip dependent repos, and other
+      # runs skip slow tests.
       run: |
-        shopt -s nullglob
-        mkdir test_durations
         for project in $(ls results | sed -n 's/\.[0-9]*\.durations\.json$//p' | sort -u); do
-          mkdir "test_durations/$project"
-          jq -S -s --indent 4 'add' results/"$project".*.durations.json \
-            > "test_durations/$project/.test_durations"
-          echo "$project: $(jq length "test_durations/$project/.test_durations") tests"
+          timings="test_durations/$project/.test_durations"
+          mkdir -p "test_durations/$project"
+          [ -f "$timings" ] || echo '{}' > "$timings"
+          jq -S -s --indent 4 'add' "$timings" results/"$project".*.durations.json > merged.json
+          mv merged.json "$timings"
+          echo "$project: $(jq length "$timings") tests"
         done
-    - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v4
+    - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      name: Save test timings
       with:
-        name: test_durations
         path: test_durations
-        include-hidden-files: true
+        key: test-durations-${{ github.run_id }}-${{ github.run_attempt }}
 
   corpus-test:
     name: Decompiler Snapshot Testing

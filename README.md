@@ -14,18 +14,19 @@ sync: angr/angr#<id>
 ## Test timings
 
 Tests are split across the test runners with
-[pytest-split](https://github.com/jerry-git/pytest-split). If a repo has a
-timings file at `tests/.test_durations`, the split is balanced by expected
-runtime; otherwise it is balanced by test count only.
+[pytest-split](https://github.com/jerry-git/pytest-split), balanced by how
+long each test took in earlier runs. Nothing needs to be committed: the
+timings live in the GitHub Actions cache of the repo being tested.
 
-To generate the file, call the CI workflow with `store_durations: true`
-(ideally from the nightly job, so that slow tests are timed too). Each test
-runner then records the timings of the tests it ran, and once all of them pass
-the `Merge Test Timings` job publishes a `test_durations` artifact containing a
-merged `<repo>/.test_durations` for every repo that was tested. Commit that
-file to `tests/.test_durations` in the corresponding repo. Tests missing from
-the file are assumed to take the average time, so it only needs refreshing
-occasionally.
+Runs on the default branch record the timings of the tests they ran and, if
+all test runners pass, the `Save Test Timings` job merges them into the
+previously cached timings and saves the result as a new `test-durations-*`
+cache entry. Every run, including pull requests, restores the most recent
+entry. Tests without a recorded timing are assumed to take the average time,
+and with no cache entry at all the split is balanced by test count only.
+
+To start over, delete the `test-durations-*` entries from the repo's Actions
+caches.
 
 ## Manual instructions
 
@@ -60,7 +61,9 @@ export GITHUB_REF=refs/heads/master
 export WORKER=0
 export NUM_WORKERS=10
 
-# Set this to record test timings into build/results/ (see "Test timings")
+# Test timings (see "Test timings"). Timings in TEST_DURATIONS_DIR are used to
+# balance the split, and STORE_DURATIONS records new ones into build/results/.
+export TEST_DURATIONS_DIR=$PWD/test_durations
 export STORE_DURATIONS=false
 
 # And finally, to run the individual steps:
