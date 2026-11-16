@@ -11,6 +11,22 @@ Other PRs can be used in place of default branches by simply linking the PR, for
 sync: angr/angr#<id>
 ```
 
+## Test timings
+
+Tests are split across the test runners with
+[pytest-split](https://github.com/jerry-git/pytest-split). If a repo has a
+timings file at `tests/.test_durations`, the split is balanced by expected
+runtime; otherwise it is balanced by test count only.
+
+To generate the file, call the CI workflow with `store_durations: true`
+(ideally from the nightly job, so that slow tests are timed too). Each test
+runner then records the timings of the tests it ran, and once all of them pass
+the `Merge Test Timings` job publishes a `test_durations` artifact containing a
+merged `<repo>/.test_durations` for every repo that was tested. Commit that
+file to `tests/.test_durations` in the corresponding repo. Tests missing from
+the file are assumed to take the average time, so it only needs refreshing
+occasionally.
+
 ## Manual instructions
 
 To perform a build manually:
@@ -43,6 +59,9 @@ export GITHUB_REF=refs/heads/master
 # between running the ga-test.sh script, without rebuilding.
 export WORKER=0
 export NUM_WORKERS=10
+
+# Set this to record test timings into build/results/ (see "Test timings")
+export STORE_DURATIONS=false
 
 # And finally, to run the individual steps:
 

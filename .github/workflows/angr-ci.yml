@@ -23,6 +23,11 @@ on:
         default: true
         type: boolean
         required: false
+      store_durations:
+        description: "Record test timings and publish them as a test_durations artifact"
+        default: false
+        type: boolean
+        required: false
 
 jobs:
   build:
@@ -98,11 +103,43 @@ jobs:
         NUM_WORKERS: 10
         INCLUDE_SELF: ${{ inputs.include_self }}
         NIGHTLY: ${{ inputs.nightly }}
+        STORE_DURATIONS: ${{ inputs.store_durations }}
     - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v4
       if: always()
       with:
         name: Test Results ${{ matrix.worker }}
-        path: build/results/*.tests.xml
+        path: |
+          build/results/*.tests.xml
+          build/results/*.durations.json
+
+  merge-durations:
+    name: Merge Test Timings
+    runs-on: ubuntu-24.04
+    needs: test
+    # Only publish timings from a complete run; a failed or cancelled worker
+    # would leave its tests missing from the merged file.
+    if: inputs.store_durations && needs.test.result == 'success'
+    steps:
+    - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v4
+      with:
+        pattern: Test Results *
+        path: results
+        merge-multiple: true
+    - name: Merge per-worker timings
+      run: |
+        shopt -s nullglob
+        mkdir test_durations
+        for project in $(ls results | sed -n 's/\.[0-9]*\.durations\.json$//p' | sort -u); do
+          mkdir "test_durations/$project"
+          jq -S -s --indent 4 'add' results/"$project".*.durations.json \
+            > "test_durations/$project/.test_durations"
+          echo "$project: $(jq length "test_durations/$project/.test_durations") tests"
+        done
+    - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v4
+      with:
+        name: test_durations
+        path: test_durations
+        include-hidden-files: true
 
   corpus-test:
     name: Decompiler Snapshot Testing
